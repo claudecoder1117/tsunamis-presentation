@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tsunamis</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: none; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// --- Utilities ---
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function smoothstep(a, b, t) { const x = clamp((t - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); }
+function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+function easeIn(t) { return t * t * t; }
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+function easeInOut(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+
+// --- Stars ---
+const stars = [];
+for (let i = 0; i < 120; i++) {
+  stars.push({ x: Math.random(), y: Math.random() * 0.45, r: 0.4 + Math.random() * 1.2,
+    phase: Math.random() * Math.PI * 2, speed: 0.5 + Math.random() * 2 });
+}
+
+// --- Particles ---
+const particles = [];
+const MAX_P = 7000;
+function emit(x, y, vx, vy, size, life, type) {
+  if (particles.length >= MAX_P) return;
+  particles.push({ x, y, vx, vy, size, life, max: life, type });
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    const g = p.type === 'mist' ? -80 : p.type === 'foam' ? 250 : 750;
+    p.vy += g * dt;
+    if (p.type === 'mist') { p.vx *= 0.96; p.vy *= 0.96; }
+    if (p.type === 'spray') { p.vx *= 0.997; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0 || p.y > H + 30 || p.x < -50) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const a = clamp(p.life / p.max, 0, 1);
+    const sz = p.size * (0.3 + 0.7 * a);
+    switch (p.type) {
+      case 'spray': ctx.fillStyle = `rgba(210,235,255,${a*0.85})`; break;
+      case 'foam':  ctx.fillStyle = `rgba(255,255,255,${a*0.5})`; break;
+      case 'mist':  ctx.fillStyle = `rgba(170,210,245,${a*0.13})`; break;
+      case 'drop':  ctx.fillStyle = `rgba(140,200,255,${a*0.6})`; break;
+      case 'crash': ctx.fillStyle = `rgba(235,248,255,${a*0.75})`; break;
+    }
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// --- Wave state ---
+let waveActive = true;
+let wavePhase = 0;         // 0..1 progress through the tsunami event
+const WAVE_DURATION = 11;  // seconds for full cycle
+let time = 0, prevTS = 0;
+let hintAlpha = 1;         // fade out hint after first use
+let usedOnce = false;
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 't' || e.key === 'T') {
+    waveActive = true;
+    wavePhase = 0;
+    resetWetGrid();
+    if (!usedOnce) { usedOnce = true; }
+  }
+});
+
+// --- Text-water collision system ---
+// Renders text to an offscreen canvas to get a pixel mask, then detects
+// when the water surface newly covers a text-edge pixel and emits
+// physics-based splash particles whose velocity comes from the local
+// water speed and the outward surface normal of the letter edge.
+let textImageData = null;
+let textDataW = 0, textDataH = 0;
+const GRID_STEP = 4;
+let wetGrid = null;
+let wetGridCols = 0, wetGridRows = 0;
+let textBounds = { left: 0, right: 0, top: 0, bottom: 0 };
+let prevSurfaceY_buf = null;
+
+function buildTextBitmap() {
+  const off = document.createElement('canvas');
+  off.width = textDataW = W;
+  off.height = textDataH = H;
+  const octx = off.getContext('2d');
+  const fontSize = Math.min(W / 5.5, H / 4.5, 200);
+  octx.font = `900 ${fontSize}px "Arial Black", "Impact", Arial, sans-serif`;
+  octx.textAlign = 'center';
+  octx.textBaseline = 'middle';
+  octx.fillStyle = '#fff';
+  octx.fillText('TSUNAMIS', W / 2, H * 0.42);
+  textImageData = octx.getImageData(0, 0, W, H).data;
+
+  // Bounding box of rendered text
+  let minX = W, maxX = 0, minY = H, maxY = 0;
+  for (let y = 0; y < H; y += 2) {
+    for (let x = 0; x < W; x += 2) {
+      if (textImageData[(y * W + x) * 4 + 3] > 128) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  textBounds = { left: Math.max(minX - 6, 0), right: Math.min(maxX + 6, W),
+                 top: Math.max(minY - 6, 0), bottom: Math.min(maxY + 6, H) };
+  wetGridCols = Math.ceil((textBounds.right - textBounds.left) / GRID_STEP);
+  wetGridRows = Math.ceil((textBounds.bottom - textBounds.top) / GRID_STEP);
+  wetGrid = new Uint8Array(wetGridCols * wetGridRows);
+  prevSurfaceY_buf = new Float64Array(SURF_N);
+  prevSurfaceY_buf.fill(H);
+}
+
+function isTextPixel(px, py) {
+  const ix = Math.round(px), iy = Math.round(py);
+  if (ix < 0 || ix >= textDataW || iy < 0 || iy >= textDataH) return false;
+  return textImageData[(iy * textDataW + ix) * 4 + 3] > 128;
+}
+
+function resetWetGrid() {
+  if (wetGrid) wetGrid.fill(0);
+  if (prevSurfaceY_buf) prevSurfaceY_buf.fill(H);
+}
+
+function checkTextSplashes(dt) {
+  if (!textImageData || !wetGrid || !waveActive || wavePhase < 0.06) return;
+
+  for (let row = 0; row < wetGridRows; row++) {
+    for (let col = 0; col < wetGridCols; col++) {
+      const px = textBounds.left + col * GRID_STEP;
+      const py = textBounds.top + row * GRID_STEP;
+      if (!isTextPixel(px, py)) continue;
+
+      // Only splash at edge pixels (has at least one empty neighbor)
+      const above = isTextPixel(px, py - GRID_STEP);
+      const below = isTextPixel(px, py + GRID_STEP);
+      const left  = isTextPixel(px - GRID_STEP, py);
+      const right = isTextPixel(px + GRID_STEP, py);
+      if (above && below && left && right) continue;
+
+      // Water level at this column
+      const si = clamp(Math.floor((px / W) * (SURF_N - 1)), 0, SURF_N - 1);
+      const waterY = surfaceY[si];
+      const prevWY = prevSurfaceY_buf[si];
+
+      const submerged = waterY <= py;
+      const gi = row * wetGridCols + col;
+      const wasSubmerged = wetGrid[gi];
+
+      if (submerged && !wasSubmerged) {
+        // Water velocity: how fast the surface is rising (screen-up = negative dY)
+        const risingSpeed = Math.max(0, -(waterY - prevWY) / Math.max(dt, 0.001));
+        // Horizontal flow from surface gradient
+        const si_l = clamp(si - 4, 0, SURF_N - 1);
+        const si_r = clamp(si + 4, 0, SURF_N - 1);
+        const slope = (surfaceY[si_r] - surfaceY[si_l]) / (8 * (W / SURF_N));
+        const hFlow = -slope * 500;
+        const impact = Math.sqrt(hFlow * hFlow + risingSpeed * risingSpeed);
+
+        // Splash direction = outward normal of the letter edge
+        let baseAngle = -Math.PI / 2;
+        if      (!above && below)          baseAngle = -Math.PI / 2;
+        else if (above && !below)          baseAngle =  Math.PI / 2;
+        else if (!left && right)           baseAngle =  Math.PI;
+        else if (left && !right)           baseAngle =  0;
+        else if (!above && !left)          baseAngle = -Math.PI * 0.75;
+        else if (!above && !right)         baseAngle = -Math.PI * 0.25;
+        else if (!below && !left)          baseAngle =  Math.PI * 0.75;
+        else if (!below && !right)         baseAngle =  Math.PI * 0.25;
+
+        const nP = clamp(Math.floor(impact / 80), 1, 5);
+        for (let i = 0; i < nP; i++) {
+          const a = baseAngle + rand(-0.8, 0.8);
+          const spd = clamp(impact * rand(0.12, 0.55), 50, 600);
+          emit(px + rand(-3, 3), py + rand(-3, 3),
+            Math.cos(a) * spd + hFlow * 0.25,
+            Math.sin(a) * spd,
+            rand(1, 4.5), rand(0.2, 1.4), 'spray');
+        }
+        if (impact > 120 && Math.random() < 0.35) {
+          emit(px + rand(-5, 5), py + rand(-5, 5),
+            rand(-30, 30), rand(-60, -10),
+            rand(5, 12), rand(0.3, 0.9), 'foam');
+        }
+      }
+
+      // Drips when water recedes off letters
+      if (!submerged && wasSubmerged && wavePhase > 0.60) {
+        if (Math.random() < 0.06) {
+          emit(px + rand(-2, 2), py + rand(0, 4),
+            rand(-8, 8), rand(40, 140),
+            rand(1, 2.5), rand(0.3, 1.0), 'drop');
+        }
+      }
+
+      wetGrid[gi] = submerged ? 1 : 0;
+    }
+  }
+}
+
+// --- Wave parameters at a given phase ---
+function getWaveParams(p) {
+  // p: 0 to 1
+  let waveX, waveH, frontW, backW, floodH, curlP, drawback;
+
+  if (p < 0.08) {
+    // Drawback: water recedes ominously
+    const t = p / 0.08;
+    drawback = easeInOut(t) * H * 0.05;
+    waveX = W * 1.5; waveH = 0; frontW = W*0.06; backW = W*0.35;
+    floodH = 0; curlP = 0;
+  } else if (p < 0.42) {
+    // Approach: wave enters from right and grows massive
+    const t = (p - 0.08) / 0.34;
+    drawback = (1 - easeIn(t)) * H * 0.05;
+    waveX = lerp(W * 1.25, W * 0.38, easeIn(t));
+    waveH = lerp(0, H * 0.72, easeOut(t));
+    frontW = lerp(W * 0.08, W * 0.035, t);
+    backW = W * 0.40;
+    floodH = 0;
+    curlP = smoothstep(0.55, 1.0, t);
+  } else if (p < 0.52) {
+    // Break: curl plunges, massive spray
+    const t = (p - 0.42) / 0.10;
+    drawback = 0;
+    waveX = lerp(W * 0.38, W * 0.22, easeIn(t));
+    waveH = lerp(H * 0.72, H * 0.58, t * 0.5);
+    frontW = lerp(W * 0.035, W * 0.10, easeOut(t));
+    backW = W * 0.40;
+    floodH = easeOut(t) * H * 0.22;
+    curlP = 1;
+  } else if (p < 0.68) {
+    // Flood: water rushes across, submerges text
+    const t = (p - 0.52) / 0.16;
+    drawback = 0;
+    waveX = lerp(W * 0.22, W * -0.3, easeIn(t));
+    waveH = lerp(H * 0.58, H * 0.15, easeIn(t));
+    frontW = lerp(W * 0.10, W * 0.35, t);
+    backW = lerp(W * 0.40, W * 0.60, t);
+    floodH = lerp(H * 0.22, H * 0.35, easeOut(t * 0.5)) * (1 - easeIn(t) * 0.25);
+    curlP = (1 - t) * 0.5;
+  } else {
+    // Drain: water level drops, text re-emerges
+    const t = (p - 0.68) / 0.32;
+    drawback = 0;
+    waveX = W * -0.5;
+    waveH = lerp(H * 0.15, 0, easeIn(t));
+    frontW = W * 0.4; backW = W * 0.6;
+    floodH = lerp(H * 0.30, 0, easeOut(t));
+    curlP = 0;
+  }
+
+  return { waveX, waveH, frontW, backW, floodH, curlP, drawback };
+}
+
+// --- Water surface computation ---
+const SURF_N = 400;
+const surfaceY = new Float64Array(SURF_N);
+
+function computeSurface(t, params) {
+  const baseY = H * 0.68 + (params.drawback || 0);
+  for (let i = 0; i < SURF_N; i++) {
+    const x = (i / (SURF_N - 1)) * W;
+
+    // Ambient ocean waves (always present)
+    let ambient = 0;
+    ambient += Math.sin(x * 0.007 + t * 1.3) * 7;
+    ambient += Math.sin(x * 0.013 - t * 0.9) * 5;
+    ambient += Math.sin(x * 0.003 + t * 0.6) * 10;
+    ambient += Math.sin(x * 0.022 + t * 2.1) * 3;
+
+    // Tsunami profile
+    let tsunami = 0;
+    if (params.waveH > 1) {
+      const dx = x - params.waveX;
+      if (dx >= 0) {
+        tsunami = params.waveH * Math.exp(-(dx * dx) / (params.backW * params.backW));
+      } else {
+        tsunami = params.waveH * Math.exp(-(dx * dx) / (params.frontW * params.frontW));
+      }
+    }
+
+    // Flood level
+    const flood = params.floodH || 0;
+
+    surfaceY[i] = baseY - ambient - tsunami - flood;
+  }
+}
+
+// Find the wave crest (highest point) and steepest face for curl/particle rendering
+function findCrest() {
+  let minY = H, crestIdx = 0;
+  for (let i = 0; i < SURF_N; i++) {
+    if (surfaceY[i] < minY) { minY = surfaceY[i]; crestIdx = i; }
+  }
+  // Steepness: max slope on the front face (left side of crest)
+  let maxSlope = 0;
+  for (let i = Math.max(0, crestIdx - 60); i < crestIdx; i++) {
+    const s = (surfaceY[i] - surfaceY[i + 3]) / 3;
+    if (s > maxSlope) maxSlope = s;
+  }
+  const crestX = (crestIdx / (SURF_N - 1)) * W;
+  const crestH = (H * 0.68) - minY;
+  return { x: crestX, y: minY, height: crestH, slope: maxSlope, idx: crestIdx };
+}
+
+// ====================== RENDERING ======================
+
+function drawSky() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H * 0.72);
+  grad.addColorStop(0, '#050a1a');
+  grad.addColorStop(0.15, '#0a1230');
+  grad.addColorStop(0.4, '#142050');
+  grad.addColorStop(0.7, '#1e3568');
+  grad.addColorStop(1.0, '#2a4a78');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawStars(t) {
+  for (const s of stars) {
+    const flicker = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
+    ctx.globalAlpha = flicker * 0.8;
+    ctx.fillStyle = '#e0e8ff';
+    ctx.beginPath();
+    ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawMoon(t) {
+  const mx = W * 0.12, my = H * 0.1, mr = Math.min(W, H) * 0.028;
+  const glow = ctx.createRadialGradient(mx, my, 0, mx, my, mr * 6);
+  glow.addColorStop(0, 'rgba(180,210,255,0.25)');
+  glow.addColorStop(0.5, 'rgba(180,210,255,0.06)');
+  glow.addColorStop(1, 'rgba(180,210,255,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(mx, my, mr * 6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#dde8ff';
+  ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(180,195,220,0.5)';
+  ctx.beginPath(); ctx.arc(mx - mr*0.25, my - mr*0.15, mr*0.15, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(mx + mr*0.3, my + mr*0.2, mr*0.12, 0, Math.PI * 2); ctx.fill();
+
+  // Moon reflection on water
+  const baseY = H * 0.68;
+  for (let i = 0; i < 18; i++) {
+    const y = baseY + 5 + i * H * 0.014;
+    const shimmer = Math.sin(t * 3 + i * 0.7) * W * 0.007;
+    ctx.fillStyle = `rgba(180,210,255,${0.10 * (1 - i/18)})`;
+    ctx.fillRect(mx - 7 + shimmer, y, 14, H * 0.010);
+  }
+}
+
+function drawText(t, params) {
+  const fontSize = Math.min(W / 5.5, H / 4.5, 200);
+  let tx = W / 2, ty = H * 0.42;
+
+  // Tremor when wave is near
+  if (waveActive && wavePhase > 0.12 && wavePhase < 0.55) {
+    const intensity = Math.sin(wavePhase * Math.PI / 0.55) * 5;
+    tx += Math.sin(t * 37) * intensity;
+    ty += Math.cos(t * 29) * intensity * 0.6;
+  }
+
+  // Dim text when submerged
+  let textAlpha = 1;
+  const waterAtText = surfaceY[Math.floor(((W/2) / W) * (SURF_N - 1))] || H * 0.68;
+  if (waterAtText < ty + fontSize * 0.4) {
+    // Text center is below water
+    textAlpha = clamp((waterAtText - (ty - fontSize * 0.5)) / fontSize, 0, 1);
+    textAlpha = Math.max(textAlpha * 0.15, 0); // dim but slightly visible underwater
+  }
+
+  ctx.save();
+  ctx.globalAlpha = clamp(textAlpha, 0, 1);
+  ctx.font = `900 ${fontSize}px "Arial Black", "Impact", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Glow
+  ctx.shadowColor = 'rgba(80,160,255,0.6)';
+  ctx.shadowBlur = 35;
+  ctx.strokeStyle = 'rgba(80,160,255,0.3)';
+  ctx.lineWidth = 3;
+  ctx.strokeText('TSUNAMIS', tx, ty);
+
+  const tg = ctx.createLinearGradient(tx - fontSize * 2.5, ty, tx + fontSize * 2.5, ty);
+  tg.addColorStop(0, '#ffffff');
+  tg.addColorStop(0.3, '#b8d8ff');
+  tg.addColorStop(0.5, '#ffffff');
+  tg.addColorStop(0.7, '#b8d8ff');
+  tg.addColorStop(1, '#ffffff');
+  ctx.fillStyle = tg;
+  ctx.fillText('TSUNAMIS', tx, ty);
+
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawOcean(t) {
+  // Deep layer
+  const deep = ctx.createLinearGradient(0, H * 0.4, 0, H);
+  deep.addColorStop(0, '#08203a');
+  deep.addColorStop(0.4, '#051828');
+  deep.addColorStop(1, '#020c15');
+  ctx.fillStyle = deep;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let i = 0; i < SURF_N; i++) ctx.lineTo((i / (SURF_N - 1)) * W, surfaceY[i] + 10);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  // Main water
+  const minSurf = Math.min(...surfaceY);
+  const main = ctx.createLinearGradient(0, Math.max(minSurf - 20, 0), 0, H);
+  main.addColorStop(0, '#1a70a8');
+  main.addColorStop(0.06, '#156090');
+  main.addColorStop(0.15, '#0d4a72');
+  main.addColorStop(0.35, '#083558');
+  main.addColorStop(0.6, '#052540');
+  main.addColorStop(1, '#031520');
+  ctx.fillStyle = main;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let i = 0; i < SURF_N; i++) ctx.lineTo((i / (SURF_N - 1)) * W, surfaceY[i]);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  // Surface highlight
+  ctx.strokeStyle = 'rgba(140,200,255,0.28)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < SURF_N; i++) {
+    const x = (i / (SURF_N - 1)) * W;
+    if (i === 0) ctx.moveTo(x, surfaceY[i]); else ctx.lineTo(x, surfaceY[i]);
+  }
+  ctx.stroke();
+
+  // Foam dashes
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 14]);
+  ctx.beginPath();
+  for (let i = 0; i < SURF_N; i++) {
+    const x = (i / (SURF_N - 1)) * W;
+    if (i === 0) ctx.moveTo(x, surfaceY[i] - 1); else ctx.lineTo(x, surfaceY[i] - 1);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawCurl(crest, params) {
+  if (!params || params.curlP < 0.05 || crest.height < H * 0.05) return;
+
+  const cp = params.curlP;
+  const cx = crest.x, cy = crest.y;
+  const curlLen = crest.height * 0.55 * cp;
+  const curlRad = crest.height * 0.22 * cp;
+
+  ctx.save();
+  const steps = 45;
+  const outerPts = [], innerPts = [];
+
+  for (let i = 0; i <= steps; i++) {
+    const p = i / steps;
+    const angle = p * Math.PI * cp * 1.1;
+    const taper = 1 - p * 0.55;
+    const oR = curlRad * taper;
+
+    const ox = cx - curlLen * p - Math.sin(angle) * oR * 0.5;
+    const oy = cy + (1 - Math.cos(angle)) * oR * 1.2 + p * curlLen * 0.25;
+    outerPts.push({ x: ox, y: oy });
+
+    const iR = oR * 0.45;
+    const ix = cx - curlLen * p * 0.8 - Math.sin(angle) * iR * 0.5;
+    const iy = cy + (1 - Math.cos(angle)) * iR * 1.2 + p * curlLen * 0.25 + oR * 0.4;
+    innerPts.push({ x: ix, y: iy });
+  }
+
+  // Barrel interior
+  if (cp > 0.2) {
+    const barrelGrad = ctx.createLinearGradient(cx, cy, cx - curlLen, cy + curlLen * 0.5);
+    barrelGrad.addColorStop(0, `rgba(2,8,18,${cp * 0.8})`);
+    barrelGrad.addColorStop(1, `rgba(8,25,50,${cp * 0.5})`);
+    ctx.fillStyle = barrelGrad;
+    ctx.beginPath();
+    ctx.moveTo(outerPts[0].x, outerPts[0].y);
+    for (const pt of outerPts) ctx.lineTo(pt.x, pt.y);
+    for (let i = innerPts.length - 1; i >= 0; i--) ctx.lineTo(innerPts[i].x, innerPts[i].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Foam lip
+  ctx.strokeStyle = `rgba(255,255,255,${cp * 0.85})`;
+  ctx.lineWidth = 4 + cp * 5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(outerPts[0].x, outerPts[0].y);
+  for (const pt of outerPts) ctx.lineTo(pt.x, pt.y);
+  ctx.stroke();
+
+  // Secondary foam edge
+  ctx.strokeStyle = `rgba(200,230,255,${cp * 0.4})`;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let i = 0; i < outerPts.length; i++) {
+    if (i === 0) ctx.moveTo(outerPts[i].x, outerPts[i].y + 5);
+    else ctx.lineTo(outerPts[i].x, outerPts[i].y + 5);
+  }
+  ctx.stroke();
+
+  // Foam dots
+  ctx.fillStyle = `rgba(255,255,255,${cp * 0.55})`;
+  for (let i = 0; i < outerPts.length; i += 2) {
+    const pt = outerPts[i];
+    ctx.beginPath();
+    ctx.arc(pt.x + rand(-5, 5), pt.y + rand(-5, 5), rand(1.5, 4.5) * cp, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Spray from curl tip
+  if (cp > 0.3) {
+    const tip = outerPts[outerPts.length - 1];
+    for (let j = 0; j < Math.floor(cp * 10); j++) {
+      emit(tip.x + rand(-15, 15), tip.y + rand(-15, 5),
+        rand(-400, -60), rand(-500, -150),
+        rand(1.5, 5), rand(0.4, 2), 'spray');
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawFoamBand() {
+  ctx.save();
+  for (let i = 3; i < SURF_N - 3; i++) {
+    const slope = Math.abs(surfaceY[i + 3] - surfaceY[i - 3]) / 6;
+    if (slope > 1.5) {
+      const x = (i / (SURF_N - 1)) * W;
+      const y = surfaceY[i];
+      const d = clamp((slope - 1.5) / 5, 0, 1);
+      for (let j = 0; j < Math.floor(d * 4); j++) {
+        ctx.fillStyle = `rgba(255,255,255,${0.12 + d * 0.35})`;
+        ctx.beginPath();
+        ctx.arc(x + rand(-10, 10), y + rand(-3, 14), rand(2, 5 + d * 5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawHint(t) {}
+
+// --- Particle spawning during wave ---
+function spawnWaveParticles(crest, params, dt) {
+  if (!waveActive || !crest || crest.height < H * 0.03) return;
+
+  const rate = dt / 0.016; // normalize to 60fps
+
+  // Spray from crest
+  if (crest.height > H * 0.08 && wavePhase < 0.68) {
+    const n = Math.floor(clamp(crest.slope / 2, 0, 1) * 14 * rate);
+    for (let i = 0; i < n; i++) {
+      emit(crest.x + rand(-30, 30), crest.y + rand(-20, 5),
+        rand(-550, -80), rand(-600, -180),
+        rand(1, 5.5), rand(0.3, 2.5), 'spray');
+    }
+  }
+
+  // Mist
+  if (crest.slope > 1.5 && wavePhase < 0.70) {
+    if (Math.random() < 0.6 * rate) {
+      emit(crest.x + rand(-100, 50), crest.y + rand(-40, 10),
+        rand(-200, -20), rand(-140, -20),
+        rand(25, 65), rand(2, 5), 'mist');
+    }
+  }
+
+  // Crash burst (during break phase)
+  if (wavePhase > 0.40 && wavePhase < 0.60) {
+    const intensity = 1 - Math.abs(wavePhase - 0.50) / 0.10;
+    const n = Math.floor(intensity * 20 * rate);
+    for (let i = 0; i < n; i++) {
+      emit(crest.x + rand(-80, 80), crest.y + rand(-10, crest.height * 0.4),
+        rand(-350, 350), rand(-550, -120),
+        rand(2, 8), rand(0.3, 1.8), 'crash');
+    }
+    // Dense mist wall
+    for (let i = 0; i < Math.floor(intensity * 5 * rate); i++) {
+      emit(crest.x + rand(-120, 120), crest.y + rand(-20, crest.height * 0.3),
+        rand(-180, 180), rand(-200, -40),
+        rand(30, 70), rand(2, 5), 'mist');
+    }
+  }
+
+  // Foam on turbulent surface during flood
+  if (wavePhase > 0.50 && wavePhase < 0.80) {
+    const n = Math.floor(4 * rate);
+    for (let i = 0; i < n; i++) {
+      const rx = rand(0, W);
+      const ri = Math.floor((rx / W) * (SURF_N - 1));
+      const ry = surfaceY[clamp(ri, 0, SURF_N - 1)];
+      emit(rx, ry + rand(-5, 5), rand(-40, 40), rand(-80, -20),
+        rand(3, 8), rand(0.5, 2), 'foam');
+    }
+  }
+
+  // Drips during drain
+  if (wavePhase > 0.65 && wavePhase < 0.95) {
+    if (Math.random() < 0.4 * rate) {
+      emit(rand(W * 0.1, W * 0.9), rand(H * 0.2, H * 0.5),
+        rand(-15, 15), rand(20, 100),
+        rand(1, 3), rand(0.4, 1.2), 'drop');
+    }
+  }
+}
+
+// ====================== MAIN LOOP ======================
+
+function frame(ts) {
+  if (!prevTS) prevTS = ts;
+  const dt = Math.min((ts - prevTS) / 1000, 0.05);
+  prevTS = ts;
+  time += dt;
+
+  // Advance wave phase
+  let params = { waveX: W*2, waveH: 0, frontW: W*0.06, backW: W*0.35, floodH: 0, curlP: 0, drawback: 0 };
+  if (waveActive) {
+    wavePhase += dt / WAVE_DURATION;
+    if (wavePhase >= 1) {
+      waveActive = false;
+      wavePhase = 0;
+    } else {
+      params = getWaveParams(wavePhase);
+    }
+  }
+
+  // Build text collision bitmap on first frame or after resize
+  if (!textImageData || textDataW !== W || textDataH !== H) buildTextBitmap();
+
+  // Compute water surface
+  computeSurface(time, params);
+
+  // Physics-based splashes where water contacts letter edges
+  checkTextSplashes(dt);
+  if (prevSurfaceY_buf) prevSurfaceY_buf.set(surfaceY);
+
+  const crest = findCrest();
+
+  // --- Draw ---
+  ctx.clearRect(0, 0, W, H);
+  drawSky();
+  drawStars(time);
+  drawMoon(time);
+  drawText(time, params);
+  drawOcean(time);
+  drawCurl(crest, params);
+  drawFoamBand();
+  drawHint(time);
+
+  // Particles
+  spawnWaveParticles(crest, params, dt);
+  updateParticles(dt);
+  drawParticles();
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
