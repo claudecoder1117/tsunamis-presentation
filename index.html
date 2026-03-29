@@ -99,6 +99,7 @@ let usedOnce = false;
 let stage = 'wave';
 let transitionProgress = 0;
 const TRANSITION_DUR = 4.5;
+let snapParams = null; // wave params at transition start, for smooth blending
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') {
@@ -106,6 +107,7 @@ window.addEventListener('keydown', (e) => {
     wavePhase = 0;
     stage = 'wave';
     transitionProgress = 0;
+    snapParams = null;
     canvas.style.display = 'block';
     document.getElementById('slide-1').classList.remove('active');
     particles.length = 0;
@@ -721,6 +723,7 @@ function frame(ts) {
   if (stage === 'wave') {
     wavePhase += dt / WAVE_DURATION;
     if (wavePhase >= 0.46) {
+      snapParams = getWaveParams(Math.min(wavePhase, 0.459));
       stage = 'transition';
       transitionProgress = 0;
       waveActive = false;
@@ -747,9 +750,12 @@ function frame(ts) {
     const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.38));
     trailingY = lerp(H * 0.20, H + 80, tP);
 
-    params.wallCrestY = -H * 0.2;
-    params.floodH = lerp(H * 0.06, H * 0.35, smoothstep(0, 1, transitionProgress));
-    params.curlP = 0;
+    // Smooth blend: wall crest/curl fade out over the first 25% of transition
+    const blend = smoothstep(0, 0.25, transitionProgress);
+    const sp = snapParams || { wallCrestY: H * 0.04, curlP: 1, floodH: H * 0.17 };
+    params.wallCrestY = lerp(sp.wallCrestY, -H * 0.2, blend);
+    params.curlP = lerp(sp.curlP, 0, blend);
+    params.floodH = lerp(sp.floodH, H * 0.35, smoothstep(0, 1, transitionProgress));
     params.drawback = 0;
   }
 
