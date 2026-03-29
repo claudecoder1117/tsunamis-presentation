@@ -97,10 +97,8 @@ let time = 0, prevTS = 0;
 let usedOnce = false;
 
 let stage = 'wave';
-let floodTimer = 0;
-const FLOOD_HOLD = 1.2;
 let transitionProgress = 0;
-const TRANSITION_DUR = 3.5;
+const TRANSITION_DUR = 4.5;
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') {
@@ -168,7 +166,8 @@ function resetWetGrid() {
 }
 
 function checkTextSplashes(dt) {
-  if (!textImageData || !wetGrid || !waveActive || wavePhase < 0.06) return;
+  if (!textImageData || !wetGrid || stage === 'slide') return;
+  if (stage === 'wave' && wavePhase < 0.06) return;
 
   for (let row = 0; row < wetGridRows; row++) {
     for (let col = 0; col < wetGridCols; col++) {
@@ -723,26 +722,24 @@ function frame(ts) {
   if (stage === 'slide') { requestAnimationFrame(frame); return; }
 
   let params = { wallCrestY: H, floodH: 0, curlP: 0, drawback: 0 };
+  let edgeY = -200; // off-screen until transition
 
-  if (stage === 'wave' && waveActive) {
+  // --- Wave approach: wall rises from horizon ---
+  if (stage === 'wave') {
     wavePhase += dt / WAVE_DURATION;
-    if (wavePhase >= 1) {
-      waveActive = false;
-      wavePhase = 1;
-      stage = 'flooded';
-      floodTimer = 0;
-    }
-    params = getWaveParams(Math.min(wavePhase, 0.999));
-  } else if (stage === 'flooded') {
-    params = { wallCrestY: -H * 0.2, floodH: H * 0.35, curlP: 0, drawback: 0 };
-    floodTimer += dt;
-    if (floodTimer >= FLOOD_HOLD) {
+    if (wavePhase >= 0.44) {
+      // Wall has crested — the crash IS the page transition
       stage = 'transition';
       transitionProgress = 0;
+      waveActive = false;
       document.getElementById('slide-1').classList.add('active');
+    } else {
+      params = getWaveParams(wavePhase);
     }
-  } else if (stage === 'transition') {
-    params = { wallCrestY: -H * 0.2, floodH: H * 0.35, curlP: 0, drawback: 0 };
+  }
+
+  // --- Crash + pull-down as one continuous motion ---
+  if (stage === 'transition') {
     transitionProgress += dt / TRANSITION_DUR;
     if (transitionProgress >= 1) {
       stage = 'slide';
@@ -750,6 +747,13 @@ function frame(ts) {
       requestAnimationFrame(frame);
       return;
     }
+    // The wave crest sweeps from near the top down to below the screen
+    edgeY = lerp(H * 0.04, H + 80, easeInOut(transitionProgress));
+    // Front water surface tracks the foam edge
+    params.wallCrestY = -H * 0.2;
+    params.floodH = Math.max(0, H * 0.68 - edgeY);
+    params.curlP = 0;
+    params.drawback = 0;
   }
 
   // Text collision bitmap
@@ -758,36 +762,37 @@ function frame(ts) {
   // Compute front water surface
   computeSurface(time, params);
 
-  // Text collision splashes
+  // Text collision splashes (fire as the foam edge sweeps over the letters)
   checkTextSplashes(dt);
   if (prevSurfaceY_buf) prevSurfaceY_buf.set(surfaceY);
 
   // --- Draw ---
   ctx.clearRect(0, 0, W, H);
-
-  // 1. Sky (background)
   drawSky();
   drawStars(time);
   drawMoon(time);
-
-  // 2. Wave wall (BEHIND the text — the approaching tsunami)
   drawWaveWall(time, params);
-
-  // 3. Text (in front of the wall, behind the flood water)
   drawText(time, params);
-
-  // 4. Front ocean (the actual water that rises and submerges the text)
   drawOcean(time);
   drawFoamBand();
 
-  // 5. Transition pull-down
+  // The wave crest sweeping down clears the scene above it, revealing the next slide
   if (stage === 'transition') {
-    const edgeY = easeInOut(transitionProgress) * (H + 80);
     ctx.clearRect(0, 0, W, Math.max(0, edgeY - 45));
     drawTransitionFoam(time, edgeY);
+
+    // Extra crash spray as foam sweeps through the text area
+    if (edgeY > H * 0.25 && edgeY < H * 0.6) {
+      const rate = dt / 0.016;
+      for (let i = 0; i < Math.floor(6 * rate); i++) {
+        emit(rand(W * 0.1, W * 0.9), edgeY + rand(-20, 10),
+          rand(-120, 120), rand(-350, -80),
+          rand(2, 6), rand(0.3, 1.5), 'crash');
+      }
+    }
   }
 
-  // 6. Particles (on top of everything — spray flies toward the viewer)
+  // Particles (drawn last — spray flies above the foam into the cleared area)
   spawnWallParticles(params, dt);
   updateParticles(dt);
   drawParticles();
