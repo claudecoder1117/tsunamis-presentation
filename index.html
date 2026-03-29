@@ -714,6 +714,7 @@ function frame(ts) {
       stage = 'transition';
       transitionProgress = 0;
       waveActive = false;
+      if (wetGrid) wetGrid.fill(0); // reset so cascade can splash on the way down
       document.getElementById('slide-1').classList.add('active');
     } else {
       params = getWaveParams(wavePhase);
@@ -736,8 +737,8 @@ function frame(ts) {
     const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.25));
     trailingY = lerp(-50, H + 80, tP);
 
-    // Screen stays fully flooded — wall already off-screen
-    params.wallCrestY = -H * 0.2;
+    // Wall stays at -50 (where crest exited) — no gradient jump
+    params.wallCrestY = -50;
     params.floodH = H * 0.35;
     params.curlP = 0;
     params.drawback = 0;
@@ -772,7 +773,45 @@ function frame(ts) {
       ctx.clearRect(0, 0, W, Math.max(0, trailingY - 15));
     }
 
-    // Spray at the leading foam edge during pull-down
+    // Splashes when the leading edge sweeps through the text on the way down
+    if (textImageData && wetGrid && leadingY > textBounds.top - 10 && leadingY < textBounds.bottom + 10) {
+      for (let row = 0; row < wetGridRows; row++) {
+        for (let col = 0; col < wetGridCols; col++) {
+          const px = textBounds.left + col * GRID_STEP;
+          const py = textBounds.top + row * GRID_STEP;
+          if (!isTextPixel(px, py)) continue;
+          const gi = row * wetGridCols + col;
+          const covered = leadingY >= py;
+          if (covered && !wetGrid[gi]) {
+            const ab = isTextPixel(px, py - GRID_STEP);
+            const be = isTextPixel(px, py + GRID_STEP);
+            const le = isTextPixel(px - GRID_STEP, py);
+            const ri = isTextPixel(px + GRID_STEP, py);
+            if (ab && be && le && ri) { wetGrid[gi] = 1; continue; }
+            let ba = Math.PI / 2;
+            if (!ab) ba = -Math.PI / 2;
+            else if (!be) ba = Math.PI / 2;
+            else if (!le) ba = Math.PI;
+            else if (!ri) ba = 0;
+            for (let i = 0; i < Math.floor(rand(1, 4)); i++) {
+              const a = ba + rand(-0.9, 0.9);
+              const s = rand(80, 400);
+              emit(px + rand(-3, 3), py + rand(-3, 3),
+                Math.cos(a) * s, Math.sin(a) * s,
+                rand(1.5, 5), rand(0.2, 1.2), 'spray');
+            }
+            if (Math.random() < 0.25) {
+              emit(px + rand(-5, 5), py + rand(-5, 5),
+                rand(-20, 20), rand(-40, 20),
+                rand(5, 11), rand(0.3, 0.7), 'foam');
+            }
+          }
+          wetGrid[gi] = covered ? 1 : 0;
+        }
+      }
+    }
+
+    // Light spray at the leading foam edge
     if (leadingY > 0 && leadingY < H) {
       const rate = dt / 0.016;
       for (let i = 0; i < Math.floor(2 * rate); i++) {
