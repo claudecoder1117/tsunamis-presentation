@@ -253,20 +253,13 @@ function getWaveParams(p) {
     drawback = easeInOut(t) * H * 0.05;
     wallCrestY = horizonY + 20;
     floodH = 0; curlP = 0;
-  } else if (p < 0.44) {
-    // Approach: wall rises from horizon toward the viewer
-    const t = (p - 0.08) / 0.36;
-    drawback = (1 - easeIn(t)) * H * 0.05;
-    wallCrestY = lerp(horizonY, H * 0.04, easeOut(t));
-    floodH = lerp(0, H * 0.04, easeIn(t));
-    curlP = smoothstep(0.55, 1.0, t);
   } else {
-    // Crash: crest sweeps off the top of the screen, flood covers everything
-    const t = clamp((p - 0.44) / 0.18, 0, 1);
-    drawback = 0;
-    wallCrestY = lerp(H * 0.04, -50, easeIn(t));
-    floodH = lerp(H * 0.04, H * 0.35, easeOut(t));
-    curlP = 1 - smoothstep(0.3, 1.0, t);
+    // One smooth rise: crest goes from horizon all the way off the screen
+    const t = clamp((p - 0.08) / 0.54, 0, 1);
+    drawback = (1 - smoothstep(0, 0.3, t)) * H * 0.05;
+    wallCrestY = lerp(horizonY, -50, easeOut(t));
+    floodH = lerp(0, H * 0.12, easeIn(t)); // stays below the text
+    curlP = smoothstep(0.4, 0.75, t);
   }
 
   return { wallCrestY, floodH, curlP, drawback };
@@ -739,7 +732,7 @@ function frame(ts) {
 
     // Wall stays at -50 (where crest exited) — no gradient jump
     params.wallCrestY = -50;
-    params.floodH = H * 0.35;
+    params.floodH = H * 0.12; // text stays visible so cascade can crash over it
     params.curlP = 0;
     params.drawback = 0;
   }
@@ -750,9 +743,7 @@ function frame(ts) {
   // Compute front water surface (for ocean visual, not cascade collision)
   computeSurface(time, params);
 
-  // Text collision from flood (wave stage only)
-  checkTextSplashes(dt);
-  if (prevSurfaceY_buf) prevSurfaceY_buf.set(surfaceY);
+  // (splashes only on the way down — handled by cascade collision below)
 
   // --- Draw scene ---
   ctx.clearRect(0, 0, W, H);
