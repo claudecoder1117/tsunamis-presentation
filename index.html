@@ -260,26 +260,13 @@ function getWaveParams(p) {
     wallCrestY = lerp(horizonY, H * 0.04, easeOut(t));
     floodH = lerp(0, H * 0.04, easeIn(t));
     curlP = smoothstep(0.55, 1.0, t);
-  } else if (p < 0.54) {
-    // Crash: wall crests, water floods forward over the text
-    const t = (p - 0.44) / 0.10;
-    drawback = 0;
-    wallCrestY = lerp(H * 0.04, -H * 0.15, easeIn(t));
-    floodH = lerp(H * 0.04, H * 0.30, easeOut(t));
-    curlP = 1;
-  } else if (p < 0.68) {
-    // Flood: everything submerged
-    const t = (p - 0.54) / 0.14;
-    drawback = 0;
-    wallCrestY = -H * 0.2;
-    floodH = lerp(H * 0.30, H * 0.35, easeOut(t * 0.5));
-    curlP = (1 - t) * 0.4;
   } else {
-    // Sustained flood for transition
+    // Crash: crest sweeps off the top of the screen, flood covers everything
+    const t = clamp((p - 0.44) / 0.18, 0, 1);
     drawback = 0;
-    wallCrestY = -H * 0.2;
-    floodH = H * 0.35;
-    curlP = 0;
+    wallCrestY = lerp(H * 0.04, -50, easeIn(t));
+    floodH = lerp(H * 0.04, H * 0.35, easeOut(t));
+    curlP = 1 - smoothstep(0.3, 1.0, t);
   }
 
   return { wallCrestY, floodH, curlP, drawback };
@@ -722,7 +709,7 @@ function frame(ts) {
   // --- Wave approach: wall rises from horizon behind the text ---
   if (stage === 'wave') {
     wavePhase += dt / WAVE_DURATION;
-    if (wavePhase >= 0.70) {
+    if (wavePhase >= 0.62) {
       // Wave crest is off-screen, screen is fully flooded — start pull-down
       stage = 'transition';
       transitionProgress = 0;
@@ -742,12 +729,12 @@ function frame(ts) {
       requestAnimationFrame(frame);
       return;
     }
-    // Leading edge sweeps from just above the screen to below it
+    // Leading edge starts at -50 (where the crest exited) and sweeps down
     const lP = easeInOut(transitionProgress);
-    leadingY = lerp(-30, H + 80, lP);
+    leadingY = lerp(-50, H + 80, lP);
     // Trailing edge (next-slide reveal) lags behind
     const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.25));
-    trailingY = lerp(-30, H + 80, tP);
+    trailingY = lerp(-50, H + 80, tP);
 
     // Screen stays fully flooded — wall already off-screen
     params.wallCrestY = -H * 0.2;
