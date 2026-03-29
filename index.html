@@ -676,73 +676,30 @@ function drawCascade(t, leadingY, trailingY) {
   ctx.restore();
 }
 
-// --- Particle spawning from the wave wall ---
+// --- Particle spawning from the wave wall (approach stage only) ---
+// Only spray upward and mist at the crest — nothing that falls toward the text.
 function spawnWallParticles(params, dt) {
-  if (!waveActive && stage !== 'flooded') return;
+  if (!waveActive) return;
   const rate = dt / 0.016;
   const crestY = params.wallCrestY;
   const baseY = H * 0.68;
   const wallHeight = baseY - crestY;
-  if (wallHeight < 20) return;
+  if (wallHeight < 30) return;
 
-  // Spray upward from the crest (full width)
-  if (crestY < baseY - 30 && wavePhase < 0.68) {
-    const n = Math.floor(clamp(wallHeight / H * 18, 0, 14) * rate);
-    for (let i = 0; i < n; i++) {
-      const x = rand(0, W);
-      emit(x, crestY + getCrestWave(x, time) + rand(-8, 8),
-        rand(-80, 80), rand(-350, -100),
-        rand(1.5, 5), rand(0.3, 2), 'spray');
-    }
+  // Spray upward from the crest
+  const n = Math.floor(clamp(wallHeight / H * 14, 0, 10) * rate);
+  for (let i = 0; i < n; i++) {
+    const x = rand(0, W);
+    emit(x, crestY + getCrestWave(x, time) + rand(-8, 8),
+      rand(-60, 60), rand(-300, -100),
+      rand(1.5, 4.5), rand(0.3, 1.8), 'spray');
   }
 
   // Mist at the crest
-  if (crestY < baseY - 50 && wavePhase < 0.70) {
-    if (Math.random() < 0.5 * rate) {
-      emit(rand(W * 0.1, W * 0.9), crestY + rand(-25, 25),
-        rand(-50, 50), rand(-140, -30),
-        rand(30, 65), rand(2, 5), 'mist');
-    }
-  }
-
-  // Cascade: water spilling over the crest and falling toward viewer
-  if (params.curlP > 0.2 && wavePhase < 0.65) {
-    const n = Math.floor(params.curlP * 25 * rate);
-    for (let i = 0; i < n; i++) {
-      const x = rand(0, W);
-      emit(x, crestY + getCrestWave(x, time) + rand(5, 30),
-        rand(-25, 25), rand(80, 400),
-        rand(1.5, 5), rand(0.4, 1.5), 'drop');
-    }
-  }
-
-  // Crash burst (during the break phase)
-  if (wavePhase > 0.42 && wavePhase < 0.58) {
-    const intensity = 1 - Math.abs(wavePhase - 0.50) / 0.08;
-    const n = Math.floor(intensity * 25 * rate);
-    for (let i = 0; i < n; i++) {
-      emit(rand(W * 0.05, W * 0.95), crestY + rand(10, H * 0.25),
-        rand(-200, 200), rand(-500, -80),
-        rand(2, 7), rand(0.3, 1.8), 'crash');
-    }
-    // Dense mist
-    for (let i = 0; i < Math.floor(intensity * 6 * rate); i++) {
-      emit(rand(0, W), rand(crestY, crestY + H * 0.2),
-        rand(-100, 100), rand(-180, -30),
-        rand(30, 70), rand(2, 5), 'mist');
-    }
-  }
-
-  // Foam on turbulent front water during flood
-  if (wavePhase > 0.52 && wavePhase < 0.80) {
-    const n = Math.floor(5 * rate);
-    for (let i = 0; i < n; i++) {
-      const rx = rand(0, W);
-      const ri = Math.floor((rx / W) * (SURF_N - 1));
-      const ry = surfaceY[clamp(ri, 0, SURF_N - 1)];
-      emit(rx, ry + rand(-5, 5), rand(-40, 40), rand(-80, -20),
-        rand(3, 8), rand(0.5, 2), 'foam');
-    }
+  if (wallHeight > H * 0.08 && Math.random() < 0.4 * rate) {
+    emit(rand(W * 0.1, W * 0.9), crestY + rand(-20, 20),
+      rand(-40, 40), rand(-120, -30),
+      rand(25, 55), rand(2, 4), 'mist');
   }
 }
 
@@ -864,22 +821,13 @@ function frame(ts) {
       }
     }
 
-    // Extra crash spray at leading edge
-    if (leadingY > H * 0.22 && leadingY < H * 0.65) {
+    // Crash spray ONLY when the leading edge is in the text area
+    if (textImageData && leadingY > textBounds.top - 5 && leadingY < textBounds.bottom + 20) {
       const rate = dt / 0.016;
       for (let i = 0; i < Math.floor(7 * rate); i++) {
-        emit(rand(W * 0.08, W * 0.92), leadingY + rand(-22, 12),
+        emit(rand(textBounds.left, textBounds.right), leadingY + rand(-18, 10),
           rand(-140, 140), rand(-380, -60),
           rand(2, 7), rand(0.3, 1.5), 'crash');
-      }
-    }
-
-    // Drops falling ahead of the cascade
-    if (leadingY > 0 && leadingY < H) {
-      for (let i = 0; i < 2; i++) {
-        emit(rand(0, W), leadingY + rand(8, 40),
-          rand(-20, 20), rand(60, 250),
-          rand(1, 3), rand(0.3, 1), 'drop');
       }
     }
   }
