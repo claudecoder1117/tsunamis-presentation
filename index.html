@@ -722,19 +722,18 @@ function frame(ts) {
   // --- Wave approach: wall rises from horizon behind the text ---
   if (stage === 'wave') {
     wavePhase += dt / WAVE_DURATION;
-    if (wavePhase >= 0.46) {
-      snapParams = getWaveParams(Math.min(wavePhase, 0.459));
+    if (wavePhase >= 0.70) {
+      // Wave crest is off-screen, screen is fully flooded — start pull-down
       stage = 'transition';
       transitionProgress = 0;
       waveActive = false;
-      if (wetGrid) wetGrid.fill(0);
       document.getElementById('slide-1').classList.add('active');
     } else {
       params = getWaveParams(wavePhase);
     }
   }
 
-  // --- Crash: cascade pours over the text, then pulls the page down ---
+  // --- Pull-down: sweep from the top of the fully-flooded screen ---
   if (stage === 'transition') {
     transitionProgress += dt / TRANSITION_DUR;
     if (transitionProgress >= 1) {
@@ -743,20 +742,17 @@ function frame(ts) {
       requestAnimationFrame(frame);
       return;
     }
-    const sp = snapParams || { wallCrestY: H * 0.04, curlP: 1, floodH: H * 0.17 };
-    // Leading edge starts exactly where the wave crest was — one continuous foam line.
-    const startY = sp.wallCrestY;
-    const lP = transitionProgress * transitionProgress;
-    leadingY = lerp(startY, H + 80, lP);
-    // Trailing edge (next-slide reveal) starts from the same spot, lags behind.
-    const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.38));
-    trailingY = lerp(startY, H + 80, tP);
+    // Leading edge sweeps from just above the screen to below it
+    const lP = easeInOut(transitionProgress);
+    leadingY = lerp(-30, H + 80, lP);
+    // Trailing edge (next-slide reveal) lags behind
+    const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.25));
+    trailingY = lerp(-30, H + 80, tP);
 
-    // The wall crest IS the leading edge — they're the same element.
-    params.wallCrestY = leadingY;
-    // Curl fades as the crest starts sweeping down
-    params.curlP = sp.curlP * (1 - smoothstep(0, 0.15, transitionProgress));
-    params.floodH = lerp(sp.floodH, H * 0.35, smoothstep(0, 1, transitionProgress));
+    // Screen stays fully flooded — wall already off-screen
+    params.wallCrestY = -H * 0.2;
+    params.floodH = H * 0.35;
+    params.curlP = 0;
     params.drawback = 0;
   }
 
@@ -789,52 +785,13 @@ function frame(ts) {
       ctx.clearRect(0, 0, W, Math.max(0, trailingY - 15));
     }
 
-    // Cascade-based text collision: splashes when leading edge hits letter pixels
-    if (textImageData && wetGrid && leadingY > textBounds.top - 15 && leadingY < textBounds.bottom + 15) {
-      for (let row = 0; row < wetGridRows; row++) {
-        for (let col = 0; col < wetGridCols; col++) {
-          const px = textBounds.left + col * GRID_STEP;
-          const py = textBounds.top + row * GRID_STEP;
-          if (!isTextPixel(px, py)) continue;
-          const gi = row * wetGridCols + col;
-          const covered = leadingY >= py;
-          const wasCov = wetGrid[gi];
-          if (covered && !wasCov) {
-            const ab = isTextPixel(px, py - GRID_STEP);
-            const be = isTextPixel(px, py + GRID_STEP);
-            const le = isTextPixel(px - GRID_STEP, py);
-            const ri = isTextPixel(px + GRID_STEP, py);
-            if (ab && be && le && ri) { wetGrid[gi] = 1; continue; }
-            let ba = Math.PI / 2;
-            if (!ab) ba = -Math.PI / 2;
-            else if (!be) ba = Math.PI / 2;
-            else if (!le) ba = Math.PI;
-            else if (!ri) ba = 0;
-            for (let i = 0; i < Math.floor(rand(1, 5)); i++) {
-              const a = ba + rand(-0.9, 0.9);
-              const s = rand(80, 450);
-              emit(px + rand(-3, 3), py + rand(-3, 3),
-                Math.cos(a) * s, Math.sin(a) * s,
-                rand(1.5, 5), rand(0.2, 1.3), 'spray');
-            }
-            if (Math.random() < 0.3) {
-              emit(px + rand(-5, 5), py + rand(-5, 5),
-                rand(-25, 25), rand(-50, 20),
-                rand(5, 12), rand(0.3, 0.8), 'foam');
-            }
-          }
-          wetGrid[gi] = covered ? 1 : 0;
-        }
-      }
-    }
-
-    // Crash spray ONLY when the leading edge is in the text area
-    if (textImageData && leadingY > textBounds.top - 5 && leadingY < textBounds.bottom + 20) {
+    // Spray at the leading foam edge during pull-down
+    if (leadingY > 0 && leadingY < H) {
       const rate = dt / 0.016;
-      for (let i = 0; i < Math.floor(7 * rate); i++) {
-        emit(rand(textBounds.left, textBounds.right), leadingY + rand(-18, 10),
-          rand(-140, 140), rand(-380, -60),
-          rand(2, 7), rand(0.3, 1.5), 'crash');
+      for (let i = 0; i < Math.floor(2 * rate); i++) {
+        emit(rand(0, W), leadingY + rand(-12, 8),
+          rand(-40, 40), rand(-80, -15),
+          rand(1.5, 4), rand(0.3, 1), 'spray');
       }
     }
   }
