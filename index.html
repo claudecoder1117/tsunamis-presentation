@@ -6,11 +6,26 @@
 <title>Tsunamis</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: none; }
-  canvas { display: block; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: none;
+    font-family: 'Arial', sans-serif; }
+  canvas { display: block; position: fixed; top: 0; left: 0; z-index: 10; }
+  .slide { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;
+    display: none; align-items: center; justify-content: center;
+    background: linear-gradient(170deg, #0a1530 0%, #142040 35%, #1a2a55 65%, #0e1a38 100%); }
+  .slide.active { display: flex; }
+  .slide-content { text-align: center; color: #c0d8f0; max-width: 75%; padding: 3rem; }
+  .slide-content h2 { font-size: clamp(2rem, 5vw, 4rem); color: #e0f0ff; margin-bottom: 1.5rem;
+    font-weight: 800; letter-spacing: 0.05em; }
+  .slide-content p { font-size: clamp(1rem, 2.5vw, 1.5rem); line-height: 1.8; color: #a0c0e0; }
 </style>
 </head>
 <body>
+<div class="slide" id="slide-1">
+  <div class="slide-content">
+    <h2>Info Here</h2>
+    <p>Slide content will go here.</p>
+  </div>
+</div>
 <canvas id="c"></canvas>
 <script>
 const canvas = document.getElementById('c');
@@ -74,18 +89,29 @@ function drawParticles() {
   }
 }
 
-// --- Wave state ---
+// --- Wave & presentation state ---
 let waveActive = true;
 let wavePhase = 0;         // 0..1 progress through the tsunami event
 const WAVE_DURATION = 11;  // seconds for full cycle
 let time = 0, prevTS = 0;
-let hintAlpha = 1;         // fade out hint after first use
 let usedOnce = false;
+
+let stage = 'wave';        // 'wave' | 'flooded' | 'transition' | 'slide'
+let floodTimer = 0;
+const FLOOD_HOLD = 1.2;    // seconds to hold flooded screen before pull-down
+let transitionProgress = 0;
+const TRANSITION_DUR = 3.5; // seconds for the water to pull down
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') {
+    // Replay the whole sequence
     waveActive = true;
     wavePhase = 0;
+    stage = 'wave';
+    transitionProgress = 0;
+    canvas.style.display = 'block';
+    document.getElementById('slide-1').classList.remove('active');
+    particles.length = 0;
     resetWetGrid();
     if (!usedOnce) { usedOnce = true; }
   }
@@ -265,13 +291,12 @@ function getWaveParams(p) {
     floodH = lerp(H * 0.22, H * 0.35, easeOut(t * 0.5)) * (1 - easeIn(t) * 0.25);
     curlP = (1 - t) * 0.5;
   } else {
-    // Drain: water level drops, text re-emerges
-    const t = (p - 0.68) / 0.32;
+    // Sustained flood — water stays high for the pull-down transition
     drawback = 0;
     waveX = W * -0.5;
-    waveH = lerp(H * 0.15, 0, easeIn(t));
+    waveH = 0;
     frontW = W * 0.4; backW = W * 0.6;
-    floodH = lerp(H * 0.30, 0, easeOut(t));
+    floodH = H * 0.35;
     curlP = 0;
   }
 
@@ -582,7 +607,48 @@ function drawFoamBand() {
   ctx.restore();
 }
 
-function drawHint(t) {}
+function drawTransitionFoam(t, edgeY) {
+  ctx.save();
+  const bandH = 50;
+
+  // Wavy foam band
+  ctx.beginPath();
+  ctx.moveTo(-10, edgeY + 20);
+  for (let x = -10; x <= W + 10; x += 3) {
+    const wave = Math.sin(x * 0.012 + t * 3.5) * 13
+               + Math.sin(x * 0.007 - t * 2.2) * 17
+               + Math.sin(x * 0.028 + t * 5) * 6;
+    ctx.lineTo(x, edgeY - bandH + wave);
+  }
+  ctx.lineTo(W + 10, edgeY + 20);
+  ctx.closePath();
+
+  const fg = ctx.createLinearGradient(0, edgeY - bandH - 15, 0, edgeY + 20);
+  fg.addColorStop(0, 'rgba(255,255,255,0)');
+  fg.addColorStop(0.2, 'rgba(220,240,255,0.4)');
+  fg.addColorStop(0.45, 'rgba(255,255,255,0.85)');
+  fg.addColorStop(0.7, 'rgba(200,230,255,0.45)');
+  fg.addColorStop(1, 'rgba(180,215,240,0.1)');
+  ctx.fillStyle = fg;
+  ctx.fill();
+
+  // Foam dots along the edge
+  for (let i = 0; i < 50; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${rand(0.15, 0.5)})`;
+    ctx.beginPath();
+    ctx.arc(rand(0, W), edgeY + rand(-32, 12), rand(1.5, 5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Spray lifting off the foam edge
+  for (let i = 0; i < 3; i++) {
+    emit(rand(0, W), edgeY + rand(-14, 5),
+      rand(-35, 35), rand(-70, -15),
+      rand(1.5, 4), rand(0.3, 1.2), 'spray');
+  }
+
+  ctx.restore();
+}
 
 // --- Particle spawning during wave ---
 function spawnWaveParticles(crest, params, dt) {
@@ -656,15 +722,36 @@ function frame(ts) {
   prevTS = ts;
   time += dt;
 
-  // Advance wave phase
+  // --- State machine ---
+  if (stage === 'slide') { requestAnimationFrame(frame); return; }
+
   let params = { waveX: W*2, waveH: 0, frontW: W*0.06, backW: W*0.35, floodH: 0, curlP: 0, drawback: 0 };
-  if (waveActive) {
+
+  if (stage === 'wave' && waveActive) {
     wavePhase += dt / WAVE_DURATION;
     if (wavePhase >= 1) {
       waveActive = false;
-      wavePhase = 0;
-    } else {
-      params = getWaveParams(wavePhase);
+      wavePhase = 1;
+      stage = 'flooded';
+      floodTimer = 0;
+    }
+    params = getWaveParams(Math.min(wavePhase, 0.999));
+  } else if (stage === 'flooded') {
+    params.floodH = H * 0.35;
+    floodTimer += dt;
+    if (floodTimer >= FLOOD_HOLD) {
+      stage = 'transition';
+      transitionProgress = 0;
+      document.getElementById('slide-1').classList.add('active');
+    }
+  } else if (stage === 'transition') {
+    params.floodH = H * 0.35;
+    transitionProgress += dt / TRANSITION_DUR;
+    if (transitionProgress >= 1) {
+      stage = 'slide';
+      canvas.style.display = 'none';
+      requestAnimationFrame(frame);
+      return;
     }
   }
 
@@ -689,7 +776,13 @@ function frame(ts) {
   drawOcean(time);
   drawCurl(crest, params);
   drawFoamBand();
-  drawHint(time);
+
+  // Transition: clear above the receding water edge, draw foam line
+  if (stage === 'transition') {
+    const edgeY = easeInOut(transitionProgress) * (H + 80);
+    ctx.clearRect(0, 0, W, Math.max(0, edgeY - 45));
+    drawTransitionFoam(time, edgeY);
+  }
 
   // Particles
   spawnWaveParticles(crest, params, dt);
