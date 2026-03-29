@@ -166,8 +166,8 @@ function resetWetGrid() {
 }
 
 function checkTextSplashes(dt) {
-  if (!textImageData || !wetGrid || stage === 'slide') return;
-  if (stage === 'wave' && wavePhase < 0.06) return;
+  if (!textImageData || !wetGrid || stage !== 'wave') return;
+  if (wavePhase < 0.06) return;
 
   for (let row = 0; row < wetGridRows; row++) {
     for (let col = 0; col < wetGridCols; col++) {
@@ -601,41 +601,76 @@ function drawFoamBand() {
   ctx.restore();
 }
 
-function drawTransitionFoam(t, edgeY) {
+// The cascade: a curtain of water pouring down from the wave crest, IN FRONT of the text.
+// leadingY = bottom foam edge (where the crash is happening now)
+// trailingY = top edge (where the next slide is revealed behind)
+function drawCascade(t, leadingY, trailingY) {
+  if (leadingY <= trailingY + 2) return;
   ctx.save();
-  const bandH = 50;
 
+  // Dark water band between trailing and leading edges
+  const bG = ctx.createLinearGradient(0, trailingY, 0, leadingY + 20);
+  bG.addColorStop(0, '#04121e');
+  bG.addColorStop(0.25, '#082a42');
+  bG.addColorStop(0.6, '#0c3d5e');
+  bG.addColorStop(1, '#10506e');
+  ctx.fillStyle = bG;
+
+  // Wavy leading (bottom) edge
   ctx.beginPath();
-  ctx.moveTo(-10, edgeY + 20);
-  for (let x = -10; x <= W + 10; x += 3) {
-    const wave = Math.sin(x * 0.012 + t * 3.5) * 13
-               + Math.sin(x * 0.007 - t * 2.2) * 17
-               + Math.sin(x * 0.028 + t * 5) * 6;
-    ctx.lineTo(x, edgeY - bandH + wave);
+  ctx.moveTo(-10, Math.max(0, trailingY - 3));
+  ctx.lineTo(W + 10, Math.max(0, trailingY - 3));
+  ctx.lineTo(W + 10, leadingY);
+  for (let x = W + 10; x >= -10; x -= 3) {
+    const w = Math.sin(x * 0.010 + t * 3.5) * 14
+            + Math.sin(x * 0.006 - t * 2.2) * 18
+            + Math.sin(x * 0.025 + t * 5) * 7;
+    ctx.lineTo(x, leadingY + w);
   }
-  ctx.lineTo(W + 10, edgeY + 20);
   ctx.closePath();
-
-  const fg = ctx.createLinearGradient(0, edgeY - bandH - 15, 0, edgeY + 20);
-  fg.addColorStop(0, 'rgba(255,255,255,0)');
-  fg.addColorStop(0.2, 'rgba(220,240,255,0.4)');
-  fg.addColorStop(0.45, 'rgba(255,255,255,0.85)');
-  fg.addColorStop(0.7, 'rgba(200,230,255,0.45)');
-  fg.addColorStop(1, 'rgba(180,215,240,0.1)');
-  ctx.fillStyle = fg;
   ctx.fill();
 
-  for (let i = 0; i < 50; i++) {
-    ctx.fillStyle = `rgba(255,255,255,${rand(0.15, 0.5)})`;
+  // Turbulent horizontal flow lines
+  const bandH = leadingY - trailingY;
+  for (let dy = 10; dy < bandH; dy += 22) {
+    const y = trailingY + dy;
+    if (y < 0 || y > H) continue;
+    ctx.strokeStyle = `rgba(70,150,210,${0.03 + 0.025 * Math.sin(dy * 0.08 + t * 2)})`;
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(rand(0, W), edgeY + rand(-32, 12), rand(1.5, 5), 0, Math.PI * 2);
-    ctx.fill();
+    for (let x = 0; x < W; x += 6) {
+      const wb = Math.sin(x * 0.018 + dy * 0.03 + t * 3) * 5;
+      if (x === 0) ctx.moveTo(x, y + wb); else ctx.lineTo(x, y + wb);
+    }
+    ctx.stroke();
   }
 
-  for (let i = 0; i < 3; i++) {
-    emit(rand(0, W), edgeY + rand(-14, 5),
-      rand(-35, 35), rand(-70, -15),
-      rand(1.5, 4), rand(0.3, 1.2), 'spray');
+  // Thick foam at the leading edge
+  const fG = ctx.createLinearGradient(0, leadingY - 55, 0, leadingY + 25);
+  fG.addColorStop(0, 'rgba(255,255,255,0)');
+  fG.addColorStop(0.15, 'rgba(220,240,255,0.35)');
+  fG.addColorStop(0.45, 'rgba(255,255,255,0.9)');
+  fG.addColorStop(0.75, 'rgba(200,230,255,0.45)');
+  fG.addColorStop(1, 'rgba(180,215,240,0.1)');
+  ctx.fillStyle = fG;
+  ctx.beginPath();
+  ctx.moveTo(-10, leadingY + 25);
+  for (let x = -10; x <= W + 10; x += 3) {
+    const w = Math.sin(x * 0.010 + t * 3.5) * 14
+            + Math.sin(x * 0.006 - t * 2.2) * 18
+            + Math.sin(x * 0.025 + t * 5) * 7;
+    ctx.lineTo(x, leadingY - 55 + w);
+  }
+  ctx.lineTo(W + 10, leadingY + 25);
+  ctx.closePath();
+  ctx.fill();
+
+  // Foam dots
+  for (let i = 0; i < 45; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${rand(0.15, 0.5)})`;
+    ctx.beginPath();
+    ctx.arc(rand(0, W), leadingY + rand(-35, 18), rand(1.5, 5), 0, Math.PI * 2);
+    ctx.fill();
   }
 
   ctx.restore();
@@ -722,23 +757,24 @@ function frame(ts) {
   if (stage === 'slide') { requestAnimationFrame(frame); return; }
 
   let params = { wallCrestY: H, floodH: 0, curlP: 0, drawback: 0 };
-  let edgeY = -200; // off-screen until transition
+  let leadingY = -200;
+  let trailingY = -200;
 
-  // --- Wave approach: wall rises from horizon ---
+  // --- Wave approach: wall rises from horizon behind the text ---
   if (stage === 'wave') {
     wavePhase += dt / WAVE_DURATION;
-    if (wavePhase >= 0.44) {
-      // Wall has crested — the crash IS the page transition
+    if (wavePhase >= 0.46) {
       stage = 'transition';
       transitionProgress = 0;
       waveActive = false;
+      if (wetGrid) wetGrid.fill(0);
       document.getElementById('slide-1').classList.add('active');
     } else {
       params = getWaveParams(wavePhase);
     }
   }
 
-  // --- Crash + pull-down as one continuous motion ---
+  // --- Crash: cascade pours over the text, then pulls the page down ---
   if (stage === 'transition') {
     transitionProgress += dt / TRANSITION_DUR;
     if (transitionProgress >= 1) {
@@ -747,11 +783,15 @@ function frame(ts) {
       requestAnimationFrame(frame);
       return;
     }
-    // The wave crest sweeps from near the top down to below the screen
-    edgeY = lerp(H * 0.04, H + 80, easeInOut(transitionProgress));
-    // Front water surface tracks the foam edge
+    // Leading edge = foam crash-line. Starts at the TEXT level, accelerates down.
+    const lP = transitionProgress * transitionProgress;
+    leadingY = lerp(H * 0.20, H + 80, lP);
+    // Trailing edge = next-slide reveal. Lags well behind so you SEE the crash first.
+    const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.38));
+    trailingY = lerp(H * 0.20, H + 80, tP);
+
     params.wallCrestY = -H * 0.2;
-    params.floodH = Math.max(0, H * 0.68 - edgeY);
+    params.floodH = lerp(H * 0.06, H * 0.35, smoothstep(0, 1, transitionProgress));
     params.curlP = 0;
     params.drawback = 0;
   }
@@ -759,14 +799,14 @@ function frame(ts) {
   // Text collision bitmap
   if (!textImageData || textDataW !== W || textDataH !== H) buildTextBitmap();
 
-  // Compute front water surface
+  // Compute front water surface (for ocean visual, not cascade collision)
   computeSurface(time, params);
 
-  // Text collision splashes (fire as the foam edge sweeps over the letters)
+  // Text collision from flood (wave stage only)
   checkTextSplashes(dt);
   if (prevSurfaceY_buf) prevSurfaceY_buf.set(surfaceY);
 
-  // --- Draw ---
+  // --- Draw scene ---
   ctx.clearRect(0, 0, W, H);
   drawSky();
   drawStars(time);
@@ -776,23 +816,75 @@ function frame(ts) {
   drawOcean(time);
   drawFoamBand();
 
-  // The wave crest sweeping down clears the scene above it, revealing the next slide
+  // --- Cascade: rendered IN FRONT of the text, covers it as it sweeps down ---
   if (stage === 'transition') {
-    ctx.clearRect(0, 0, W, Math.max(0, edgeY - 45));
-    drawTransitionFoam(time, edgeY);
+    drawCascade(time, leadingY, trailingY);
 
-    // Extra crash spray as foam sweeps through the text area
-    if (edgeY > H * 0.25 && edgeY < H * 0.6) {
+    // Clear above trailing edge → reveals next slide
+    if (trailingY > 5) {
+      ctx.clearRect(0, 0, W, Math.max(0, trailingY - 15));
+    }
+
+    // Cascade-based text collision: splashes when leading edge hits letter pixels
+    if (textImageData && wetGrid && leadingY > textBounds.top - 15 && leadingY < textBounds.bottom + 15) {
+      for (let row = 0; row < wetGridRows; row++) {
+        for (let col = 0; col < wetGridCols; col++) {
+          const px = textBounds.left + col * GRID_STEP;
+          const py = textBounds.top + row * GRID_STEP;
+          if (!isTextPixel(px, py)) continue;
+          const gi = row * wetGridCols + col;
+          const covered = leadingY >= py;
+          const wasCov = wetGrid[gi];
+          if (covered && !wasCov) {
+            const ab = isTextPixel(px, py - GRID_STEP);
+            const be = isTextPixel(px, py + GRID_STEP);
+            const le = isTextPixel(px - GRID_STEP, py);
+            const ri = isTextPixel(px + GRID_STEP, py);
+            if (ab && be && le && ri) { wetGrid[gi] = 1; continue; }
+            let ba = Math.PI / 2;
+            if (!ab) ba = -Math.PI / 2;
+            else if (!be) ba = Math.PI / 2;
+            else if (!le) ba = Math.PI;
+            else if (!ri) ba = 0;
+            for (let i = 0; i < Math.floor(rand(1, 5)); i++) {
+              const a = ba + rand(-0.9, 0.9);
+              const s = rand(80, 450);
+              emit(px + rand(-3, 3), py + rand(-3, 3),
+                Math.cos(a) * s, Math.sin(a) * s,
+                rand(1.5, 5), rand(0.2, 1.3), 'spray');
+            }
+            if (Math.random() < 0.3) {
+              emit(px + rand(-5, 5), py + rand(-5, 5),
+                rand(-25, 25), rand(-50, 20),
+                rand(5, 12), rand(0.3, 0.8), 'foam');
+            }
+          }
+          wetGrid[gi] = covered ? 1 : 0;
+        }
+      }
+    }
+
+    // Extra crash spray at leading edge
+    if (leadingY > H * 0.22 && leadingY < H * 0.65) {
       const rate = dt / 0.016;
-      for (let i = 0; i < Math.floor(6 * rate); i++) {
-        emit(rand(W * 0.1, W * 0.9), edgeY + rand(-20, 10),
-          rand(-120, 120), rand(-350, -80),
-          rand(2, 6), rand(0.3, 1.5), 'crash');
+      for (let i = 0; i < Math.floor(7 * rate); i++) {
+        emit(rand(W * 0.08, W * 0.92), leadingY + rand(-22, 12),
+          rand(-140, 140), rand(-380, -60),
+          rand(2, 7), rand(0.3, 1.5), 'crash');
+      }
+    }
+
+    // Drops falling ahead of the cascade
+    if (leadingY > 0 && leadingY < H) {
+      for (let i = 0; i < 2; i++) {
+        emit(rand(0, W), leadingY + rand(8, 40),
+          rand(-20, 20), rand(60, 250),
+          rand(1, 3), rand(0.3, 1), 'drop');
       }
     }
   }
 
-  // Particles (drawn last — spray flies above the foam into the cleared area)
+  // Particles drawn last — spray visible above the cascade
   spawnWallParticles(params, dt);
   updateParticles(dt);
   drawParticles();
