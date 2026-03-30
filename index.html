@@ -471,8 +471,6 @@ function drawWaveWall(t, params) {
 
 function drawText(t, params) {
   // Hide text once the cascade has swept past it
-  if (stage === 'transition' && currentLeadingY > H * 0.28) return;
-
   const fontSize = Math.min(W / 5.5, H / 4.5, 200);
   let tx = W / 2, ty = H * 0.42;
 
@@ -701,7 +699,6 @@ function frame(ts) {
 
   let params = { wallCrestY: H, floodH: 0, curlP: 0, drawback: 0 };
   let leadingY = -200;
-  let trailingY = -200;
 
   // --- Wave approach: wall rises from horizon behind the text ---
   if (stage === 'wave') {
@@ -731,9 +728,6 @@ function frame(ts) {
     const lP = easeInOut(transitionProgress);
     leadingY = lerp(-50, H + 80, lP);
     currentLeadingY = leadingY;
-    // Trailing edge (next-slide reveal) lags behind
-    const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.25));
-    trailingY = lerp(-50, H + 80, tP);
 
     // Wall stays at -50 (where crest exited) — no gradient jump
     params.wallCrestY = -50;
@@ -760,16 +754,40 @@ function frame(ts) {
   drawOcean(time);
   drawFoamBand();
 
-  // --- Cascade: rendered IN FRONT of the text, covers it as it sweeps down ---
+  // --- Transition: the foam line IS the border between title and next slide ---
   if (stage === 'transition') {
-    drawCascade(time, leadingY, trailingY);
+    // Clear everything above the foam → reveals next slide. Scene stays below.
+    ctx.clearRect(0, 0, W, Math.max(0, leadingY - 25));
 
-    // Clear above trailing edge → reveals next slide
-    if (trailingY > 5) {
-      ctx.clearRect(0, 0, W, Math.max(0, trailingY - 15));
+    // Draw foam at the border
+    const fG = ctx.createLinearGradient(0, leadingY - 55, 0, leadingY + 25);
+    fG.addColorStop(0, 'rgba(255,255,255,0)');
+    fG.addColorStop(0.15, 'rgba(220,240,255,0.35)');
+    fG.addColorStop(0.45, 'rgba(255,255,255,0.9)');
+    fG.addColorStop(0.75, 'rgba(200,230,255,0.45)');
+    fG.addColorStop(1, 'rgba(180,215,240,0.1)');
+    ctx.fillStyle = fG;
+    ctx.beginPath();
+    ctx.moveTo(-10, leadingY + 25);
+    for (let x = -10; x <= W + 10; x += 3) {
+      const w = Math.sin(x * 0.010 + time * 3.5) * 14
+              + Math.sin(x * 0.006 - time * 2.2) * 18
+              + Math.sin(x * 0.025 + time * 5) * 7;
+      ctx.lineTo(x, leadingY - 55 + w);
+    }
+    ctx.lineTo(W + 10, leadingY + 25);
+    ctx.closePath();
+    ctx.fill();
+
+    // Foam dots
+    for (let i = 0; i < 45; i++) {
+      ctx.fillStyle = `rgba(255,255,255,${rand(0.15, 0.5)})`;
+      ctx.beginPath();
+      ctx.arc(rand(0, W), leadingY + rand(-35, 18), rand(1.5, 5), 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // Splashes when the leading edge sweeps through the text on the way down
+    // Splashes when the foam sweeps through the text
     if (textImageData && wetGrid && leadingY > textBounds.top - 10 && leadingY < textBounds.bottom + 10) {
       for (let row = 0; row < wetGridRows; row++) {
         for (let col = 0; col < wetGridCols; col++) {
@@ -807,7 +825,7 @@ function frame(ts) {
       }
     }
 
-    // Light spray at the leading foam edge
+    // Light spray at the foam edge
     if (leadingY > 0 && leadingY < H) {
       const rate = dt / 0.016;
       for (let i = 0; i < Math.floor(2 * rate); i++) {
