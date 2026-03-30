@@ -99,7 +99,8 @@ let usedOnce = false;
 let stage = 'wave';
 let transitionProgress = 0;
 const TRANSITION_DUR = 4.5;
-let snapParams = null; // wave params at transition start, for smooth blending
+let snapParams = null;
+let currentLeadingY = -200; // global so drawText can check it
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') {
@@ -469,6 +470,9 @@ function drawWaveWall(t, params) {
 }
 
 function drawText(t, params) {
+  // Hide text once the cascade has swept past it
+  if (stage === 'transition' && currentLeadingY > H * 0.55) return;
+
   const fontSize = Math.min(W / 5.5, H / 4.5, 200);
   let tx = W / 2, ty = H * 0.42;
 
@@ -726,6 +730,7 @@ function frame(ts) {
     // Leading edge starts at -50 (where the crest exited) and sweeps down
     const lP = easeInOut(transitionProgress);
     leadingY = lerp(-50, H + 80, lP);
+    currentLeadingY = leadingY;
     // Trailing edge (next-slide reveal) lags behind
     const tP = smoothstep(0, 1, Math.max(0, transitionProgress - 0.25));
     trailingY = lerp(-50, H + 80, tP);
