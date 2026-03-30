@@ -471,7 +471,7 @@ function drawWaveWall(t, params) {
 
 function drawText(t, params) {
   // Hide text once the cascade has swept past it
-  if (stage === 'transition' && currentLeadingY > H * 0.55) return;
+  if (stage === 'transition' && currentLeadingY > H * 0.28) return;
 
   const fontSize = Math.min(W / 5.5, H / 4.5, 200);
   let tx = W / 2, ty = H * 0.42;
