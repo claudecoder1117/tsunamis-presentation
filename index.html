@@ -161,13 +161,13 @@ function drawParticles() {
 }
 
 // --- Wave & presentation state ---
-let waveActive = true;
+let waveActive = false;
 let wavePhase = 0;
 const WAVE_DURATION = 11;
 let time = 0, prevTS = 0;
 let usedOnce = false;
 
-let stage = 'wave';
+let stage = 'title'; // static title screen, waiting for input
 let transitionProgress = 0;
 const TRANSITION_DUR = 4.5;
 let snapParams = null;
@@ -291,6 +291,12 @@ window.addEventListener('keydown', (e) => {
     resetWetGrid();
     if (!usedOnce) { usedOnce = true; }
   }
+  // From static title: trigger the wave animation
+  if (stage === 'title' && (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ')) {
+    stage = 'wave';
+    waveActive = true;
+    wavePhase = 0;
+  }
   if (stage === 'slide' && !isTransitioning) {
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {
       if (currentSlide < TOTAL_SLIDES) showSlide(currentSlide + 1, 'next');
@@ -308,6 +314,11 @@ document.addEventListener('touchstart', (e) => {
   touchStartY = e.touches[0].clientY;
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
+  if (stage !== 'slide' || isTransitioning) return;
+  if (stage === 'title') {
+    stage = 'wave'; waveActive = true; wavePhase = 0;
+    return;
+  }
   if (stage !== 'slide' || isTransitioning) return;
   const dx = e.changedTouches[0].clientX - touchStartX;
   if (Math.abs(dx) < 50) return;
@@ -949,6 +960,20 @@ function frame(ts) {
   const dt = Math.min((ts - prevTS) / 1000, 0.05);
   prevTS = ts;
   time += dt;
+
+  // Title stage: render the calm scene (no wave animation)
+  if (stage === 'title') {
+    const params = { wallCrestY: H, floodH: 0, curlP: 0, drawback: 0 };
+    computeSurface(time, params);
+    ctx.clearRect(0, 0, W, H);
+    drawSky();
+    drawStars(time);
+    drawMoon(time);
+    drawText(time, params);
+    drawOcean(time);
+    requestAnimationFrame(frame);
+    return;
+  }
 
   // Slide stage: background ocean + wave transitions
   if (stage === 'slide') {
